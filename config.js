@@ -22,7 +22,7 @@ global.prems = ['393200976225']
 
 /*⭑⭒━━━✦❘༻🩸 INFO BOT 🕊️༺❘✦━━━⭒⭑*/
 
-global.nomepack = 'blackwidow ✧ bot'
+global.nomepack = 'blackwindow ✧ bot'
 global.nomebot = '✧˚🩸 blackwindowbot 🕊️˚✧'
 global.wm = 'blackwindow ✧ bot'
 global.autore = 'allucinogeno'
