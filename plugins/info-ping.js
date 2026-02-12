@@ -13,7 +13,7 @@ let handler = async (m, { conn }) => {
 ✦ 『🔌』 \`Attivo da:\` *${uptime}*
 ✧ 『✈️』 \`Latenza:\` *${latensi}* *ms*
 ╰⭒─ׄ─ׅ─ׄ─⭒─ׄ─ׅ─ׄ─⭒
-`.trim(), m, { ...global.rcanal })
+`.trim(), m,)
 }
 
 handler.help = ['ping']
