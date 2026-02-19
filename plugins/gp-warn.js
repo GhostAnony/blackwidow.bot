@@ -1,149 +1,254 @@
-const handler = async (m, { conn, text, command, usedPrefix }) => {
-    try {
-        const target = getTargetUser(m, text);
-        
-        if (!target) {
-            return m.reply(createUsageMessage(usedPrefix, command));
-        }
-        const groupMembers = m.isGroup ? (await conn.groupMetadata(m.chat)).participants.map(p => p.id) : [];
-        if (m.isGroup && !groupMembers.includes(target)) {
-             return m.reply(`『 ❌ 』 *L'utente con il numero ${target.split('@')[0]} non è un membro di questo gruppo.*`);
-        }
-        
-        const reason = getReason(m, text, target);
+import fs from 'fs'
 
-        if (target === conn.user.jid) {
-            return m.reply('『 ‼️ 』 *Perche vorresti warnare il bot negretto????*');
-        }
-        if (global.owner.some(owner => owner[0] === target.split('@')[0])) {
-            return m.reply('🤨 A chi vuoi warnare scs???');
-        }
+const WARN_FILE = './warns.json'
+const MAX_WARN = 3 // cambia qui se vuoi 5 ecc.
 
-        const user = getUserData(target);
-        if (!user.warns) user.warns = {};
-        if (typeof user.warns[m.chat] !== 'number') user.warns[m.chat] = 0;
+// crea file se non esiste
+if (!fs.existsSync(WARN_FILE)) fs.writeFileSync(WARN_FILE, '{}')
 
-        user.warns[m.chat] += 1;
-        const remainingWarns = user.warns[m.chat];
-        if (remainingWarns >= 3) {
-            user.warns[m.chat] = 0;
-            await handleRemoval(conn, m, target);
-        } else {
-            await handleWarnMessage(conn, m, target, remainingWarns, reason);
-        }
-    } catch (error) {
-        console.error('Errore nell\'handler warn:', error);
-        return m.reply(`${global.errore}`);
+function loadWarns() {
+  return JSON.parse(fs.readFileSync(WARN_FILE, 'utf-8'))
+}
+
+function saveWarns(data) {
+  fs.writeFileSync(WARN_FILE, JSON.stringify(data, null, 2))
+}
+
+// prende il target da tag oppure da messaggio quotato (reply)
+function getTargetJid(m) {
+  if (m.mentionedJid && m.mentionedJid.length) return m.mentionedJid[0]
+  if (m.quoted && (m.quoted.sender || m.quoted.participant)) return m.quoted.sender || m.quoted.participant
+  const ctx = m.message?.extendedTextMessage?.contextInfo
+  if (ctx?.participant) return ctx.participant
+  return null
+}
+
+// verifica se un jid è owner (usa global.owner come nel tuo handler)
+function isTargetOwner(jid) {
+  const num = (jid || '').split('@')[0]
+  return Array.isArray(global.owner) && global.owner.some(([n]) => String(n) === String(num))
+}
+
+let handler = async (m, { conn, command, args, isAdmin, isOwner }) => {
+  if (!m.isGroup) return conn.reply(m.chat, '❌ Solo nei gruppi.', m)
+
+  let warns = loadWarns()
+  if (!warns[m.chat]) warns[m.chat] = {}
+
+  const botJid = conn.user?.jid
+
+  // helper permessi
+  const onlyStaff = () => (!isAdmin && !isOwner)
+
+  // helper: blocca target protetti (owner + bot)
+  const protectTarget = async (target) => {
+    if (!target) return false
+
+    if (botJid && target === botJid) {
+      await conn.reply(m.chat, '🤖 Non puoi usare questo comando sul bot.', m)
+      return true
     }
-};
 
-function getTargetUser(m, text) {
-    if (m.isGroup) {
-        return m.mentionedJid?.[0] || 
-               (m.quoted?.sender) || 
-               (text?.trim() && parseUserFromText(text.trim()));
+    if (isTargetOwner(target)) {
+      await conn.reply(m.chat, '👑 Non puoi usare questo comando sugli owner del bot.', m, { mentions: [target] })
+      return true
     }
-    return m.chat;
-}
 
-function parseUserFromText(text) {
-    const cleaned = text.replace(/@/g, '').replace(/\s+/g, '');
-    return cleaned.includes('@') ? cleaned : `${cleaned}@s.whatsapp.net`;
-}
-function getReason(m, text, target) {
-    const targetId = target.split('@')[0];
-    const regex = new RegExp(`@?${targetId}`, 'g');
-    const reason = text.replace(regex, '').trim();
-    return reason || 'Non specificato ma meritato';
-}
+    return false
+  }
 
-function getUserData(userId) {
-    if (!global.db.data.users[userId]) {
-        global.db.data.users[userId] = {
-            warns: {}
-        };
+  // ======================
+  // ⚠️ WARN
+  // ======================
+  if (command === 'warn') {
+    if (onlyStaff()) return conn.reply(m.chat, '❌ Solo admin o owner.', m)
+
+    let user = getTargetJid(m)
+    if (!user)
+      return conn.reply(
+        m.chat,
+        'Tagga un utente o rispondi a un suo messaggio.\n\nEsempi:\n!warn @utente motivo\n(reply) !warn motivo',
+        m
+      )
+
+    if (await protectTarget(user)) return
+
+    // motivo: se tagghi -> args[1..], se reply -> args[0..]
+    let reason = (m.mentionedJid?.length ? args.slice(1) : args).join(' ') || 'Nessun motivo'
+
+    warns[m.chat][user] = (warns[m.chat][user] || 0) + 1
+    let total = warns[m.chat][user]
+    saveWarns(warns)
+
+    await conn.reply(
+      m.chat,
+      `⚠️ *WARN assegnato!*\n\n👤 Utente: @${user.split('@')[0]}\n📌 Motivo: ${reason}\n📊 Totale: ${total}/${MAX_WARN}`,
+      m,
+      { mentions: [user] }
+    )
+
+    if (total >= MAX_WARN) {
+      await conn.reply(m.chat, `🚫 ${MAX_WARN} warn raggiunti. Espulsione...`, m)
+      await conn.groupParticipantsUpdate(m.chat, [user], 'remove')
+      delete warns[m.chat][user]
+      saveWarns(warns)
     }
-    return global.db.data.users[userId];
-}
 
-function createUsageMessage(usedPrefix, command) {
-    return `
-    ㅤㅤ⋆｡˚『 ╭ \`WARN\` ╯ 』˚｡⋆\n╭
-│  『 📋 』 _*METODI DISPONIBILI:*_
-│•  *\`Menziona:\`* *${usedPrefix + command} @utente*
-│•  *\`Rispondi:\`* *Quotando un msg*
-│•  *\`Numero:\`* *${usedPrefix + command} 393514357738*
-│
-*╰⭒─ׄ─ׅ─ׄ─⭒─ׄ─ׅ─ׄ─*`;
-}
+    return
+  }
 
-async function handleWarnMessage(conn, m, target, remainingWarns, reason) {
-    const username = target.split('@')[0];
-    const groupMeta = await conn.groupMetadata(m.chat);
-    const groupName = groupMeta.subject;
+  // ======================
+  // ➖ DELWARN (toglie 1)
+  // ======================
+  if (command === 'delwarn') {
+    if (onlyStaff()) return conn.reply(m.chat, '❌ Solo admin o owner.', m)
 
-    const emoji = remainingWarns === 1 ? '⚠️' : '🔔';
-    
-    const message = `『 ${emoji} 』 @${username}\n- _*Hai ricevuto un avvertimento*_
-- *\`Motivo:\`* *${reason}*
-- *\`Avvertimenti: ${remainingWarns}/3\`*`;
-    
-    const fkontak = await createUserFkontak(conn, target);
-    
-    await m.reply(message, null, { 
-        mentions: [target],
-        quoted: fkontak
-    });
-}
+    let user = getTargetJid(m)
+    if (!user)
+      return conn.reply(
+        m.chat,
+        'Tagga un utente o rispondi a un suo messaggio.\n\nEsempi:\n!delwarn @utente\n(reply) !delwarn',
+        m
+      )
 
-async function handleRemoval(conn, m, target) {
-    const username = target.split('@')[0];
-    const message = `『 🫄🏿 』 \`io ti avevo avvertito, ora sei arrivato a tre e non puoi piu redimerti, ciao ciao negro\` @${username}`;
-    
-    const fkontak = await createUserFkontak(conn, target);
+    if (await protectTarget(user)) return
 
-    await m.reply(message, null, { 
-        mentions: [target],
-        quoted: fkontak
-    });
-    
-    await conn.groupParticipantsUpdate(m.chat, [target], 'remove');
-}
+    let current = warns[m.chat][user] || 0
+    if (current <= 0)
+      return conn.reply(m.chat, `✅ @${user.split('@')[0]} non ha warn.`, m, { mentions: [user] })
 
-async function createUserFkontak(conn, target) {
-    try {
-        let username = target.split('@')[0];
-        
-        try {
-            const contact = await conn.onWhatsApp(target);
-            if (contact[0]?.notify) {
-                username = contact[0].notify;
-            }
-        } catch {}
-        
-        return {
-            key: {
-                participants: '0@s.whatsapp.net',
-                remoteJid: 'status@broadcast',
-                fromMe: false,
-                id: 'Halo'
-            },
-            message: {
-                contactMessage: {
-                    vcard: `BEGIN:VCARD\nVERSION:3.0\nN:Sy;Bot;;;\nFN:${username}\nitem1.TEL;waid=${target.split('@')[0]}:${target.split('@')[0]}\nitem1.X-ABLabel:Ponsel\nEND:VCARD`
-                }
-            },
-            participant: '0@s.whatsapp.net'
-        };
-    } catch (error) {
-        return null;
+    current -= 1
+
+    if (current <= 0) {
+      delete warns[m.chat][user]
+      saveWarns(warns)
+      return conn.reply(
+        m.chat,
+        `➖ Tolto 1 warn. Ora @${user.split('@')[0]} è a *0/${MAX_WARN}* ✅`,
+        m,
+        { mentions: [user] }
+      )
+    } else {
+      warns[m.chat][user] = current
+      saveWarns(warns)
+      return conn.reply(
+        m.chat,
+        `➖ Tolto 1 warn a @${user.split('@')[0]}\n📊 Totale: *${current}/${MAX_WARN}*`,
+        m,
+        { mentions: [user] }
+      )
     }
+  }
+
+  // ======================
+  // 🎯 SETWARN (imposta numero)
+  // ======================
+  if (command === 'setwarn') {
+    if (onlyStaff()) return conn.reply(m.chat, '❌ Solo admin o owner.', m)
+
+    let user = getTargetJid(m)
+    if (!user)
+      return conn.reply(
+        m.chat,
+        'Tagga un utente o rispondi a un suo messaggio.\n\nEsempi:\n!setwarn @utente 2\n(reply) !setwarn 2',
+        m
+      )
+
+    if (await protectTarget(user)) return
+
+    // numero: se tag -> args[1], se reply -> args[0]
+    let nStr = m.mentionedJid?.length ? args[1] : args[0]
+    if (!nStr) return conn.reply(m.chat, 'Inserisci un numero.\nEsempi:\n!setwarn @utente 2\n(reply) !setwarn 2', m)
+
+    let n = Number(nStr)
+    if (!Number.isFinite(n)) return conn.reply(m.chat, '❌ Numero non valido.', m)
+
+    n = Math.floor(n)
+    if (n < 0) n = 0
+    if (n > MAX_WARN) n = MAX_WARN
+
+    if (n === 0) {
+      delete warns[m.chat][user]
+      saveWarns(warns)
+      return conn.reply(m.chat, `🎯 Impostato: @${user.split('@')[0]} → *0/${MAX_WARN}* ✅`, m, { mentions: [user] })
+    }
+
+    warns[m.chat][user] = n
+    saveWarns(warns)
+
+    await conn.reply(m.chat, `🎯 Impostato: @${user.split('@')[0]} → *${n}/${MAX_WARN}*`, m, { mentions: [user] })
+
+    if (n >= MAX_WARN) {
+      await conn.reply(m.chat, `🚫 ${MAX_WARN} warn raggiunti. Espulsione...`, m)
+      await conn.groupParticipantsUpdate(m.chat, [user], 'remove')
+      delete warns[m.chat][user]
+      saveWarns(warns)
+    }
+
+    return
+  }
+
+  // ======================
+  // 🧹 CLEARWARN (reset totale)
+  // ======================
+  if (command === 'clearwarn') {
+    if (onlyStaff()) return conn.reply(m.chat, '❌ Solo admin o owner.', m)
+
+    let user = getTargetJid(m)
+    if (!user)
+      return conn.reply(
+        m.chat,
+        'Tagga un utente o rispondi a un suo messaggio.\n\nEsempi:\n!clearwarn @utente\n(reply) !clearwarn',
+        m
+      )
+
+    if (await protectTarget(user)) return
+
+    if (warns[m.chat][user]) {
+      delete warns[m.chat][user]
+      saveWarns(warns)
+      return conn.reply(m.chat, `✅ Warn resettati per @${user.split('@')[0]}`, m, { mentions: [user] })
+    } else {
+      return conn.reply(m.chat, 'Questo utente non ha warn.', m)
+    }
+  }
+
+  // ======================
+  // 📊 WARNLIST (libero)
+  // ======================
+  if (command === 'warnlist') {
+    let users = Object.keys(warns[m.chat] || {})
+    if (users.length === 0) return conn.reply(m.chat, '✅ Nessun warn in questo gruppo.', m)
+
+    let text = '📊 *Lista Warn*\n\n'
+    let mentions = []
+
+    for (let u of users) {
+      text += `@${u.split('@')[0]} → ${warns[m.chat][u]} warn\n`
+      mentions.push(u)
+    }
+
+    return conn.reply(m.chat, text.trim(), m, { mentions })
+  }
 }
 
+handler.help = [
+  'warn @user motivo',
+  'warn (reply) motivo',
+  'delwarn @user',
+  'delwarn (reply)',
+  'setwarn @user 2',
+  'setwarn (reply) 2',
+  'warnlist',
+  'clearwarn @user',
+  'clearwarn (reply)'
+]
+handler.tags = ['group']
+handler.command = ['warn', 'delwarn', 'setwarn', 'warnlist', 'clearwarn']
 
-handler.command = ['avverti', 'warn', 'avvertimento'];
-handler.group = true;
-handler.admin = true;
-handler.botAdmin = true;
+export default handler
 
-export default handler;
+
+
+
+
