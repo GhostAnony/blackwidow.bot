@@ -1,5 +1,3 @@
-// Plugin fatto da deadly
-
 const handler = async (m, { conn }) => {
   if (!m.isGroup) return m.reply('☠️ Questo comando funziona solo nei gruppi.');
 
@@ -22,7 +20,12 @@ const handler = async (m, { conn }) => {
   }
 
   const caption = `
-🔗 *Link gruppo:* ${inviteCode ? 'https://chat.whatsapp.com/' + inviteCode : '⚠️ Non disponibile'}\n👥 *Membri:* ${totalMembers}
+👥 *Membri:* ${totalMembers}
+🛡️ *Admin:* ${totalAdmins}
+
+
+🔗 *Link gruppo:*
+${inviteCode ? 'https://chat.whatsapp.com/' + inviteCode : '⚠️ Non disponibile'}
 `.trim();
 
   await conn.sendMessage(m.chat, {
